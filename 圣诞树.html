@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>圣诞树</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --bg-color: #000000;
+      --gold: #d4af37;
+      --cream: #fceea7;
+      --glass-bg: rgba(255, 255, 255, 0.06);
+      --glass-border: rgba(212, 175, 55, 0.7);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg-color);
+      color: var(--cream);
+      font-family: "Times New Roman", serif;
+    }
+
+    body {
+      position: relative;
+    }
+
+    /* Loader */
+    #loader {
+      position: fixed;
+      inset: 0;
+      background: #000000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      z-index: 9999;
+      transition: opacity 0.8s ease;
+    }
+
+    #loader.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .spinner {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      border: 1px solid rgba(212, 175, 55, 0.18);
+      border-top: 1px solid #d4af37;
+      animation: spin 1s linear infinite;
+      margin-bottom: 18px;
+    }
+
+    .loader-text {
+      font-size: 14px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: #fceea7;
+      opacity: 0.8;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* Title */
+    .title {
+      position: absolute;
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: "Cinzel", serif;
+      font-size: 56px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      text-align: center;
+      background: linear-gradient(120deg, #fceea7, #ffffff, #d4af37);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      text-shadow:
+        0 0 8px rgba(252, 238, 167, 0.4),
+        0 0 20px rgba(212, 175, 55, 0.6),
+        0 0 40px rgba(212, 175, 55, 0.8);
+      z-index: 10;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+
+    /* WebGL container */
+    #scene-root {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+
+
+    /* Subtle vignette over the whole screen */
+    .vignette {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: radial-gradient(circle at center, rgba(0, 0, 0, 0) 40%, rgba(0, 0, 0, 0.6) 100%);
+      mix-blend-mode: soft-light;
+      z-index: 5;
+    }
+  </style>
+</head>
+<body>
+  <!-- Loader -->
+  <div id="loader">
+    <div class="spinner"></div>
+    <div class="loader-text">LOADING HOLIDAY MAGIC</div>
+  </div>
+
+  <div class="title">Merry Christmas</div>
+
+  <!-- Scene container -->
+  <div id="scene-root"></div>
+
+  <div class="vignette"></div>
+
+  <!-- Import map -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+    import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+    import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+    import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+
+    // ---------- GLOBAL STATE ----------
+    const STATE = {
+      mode: "TREE",       // "TREE" | "SCATTER"
+      targetMode: "TREE",
+      lastModeSwitchTime: 0,
+      gesture: {
+        palmCenter: new THREE.Vector2(0.5, 0.5)
+      },
+      mainRotationTarget: new THREE.Euler(),
+      lastTime: performance.now()
+    };
+
+    // DOM
+    const loaderEl = document.getElementById("loader");
+    const sceneRoot = document.getElementById("scene-root");
+
+    // Three.js core
+    let renderer, scene, camera, composer;
+    let mainGroup;
+    let envMap;
+
+    // Particles
+    const MAIN_PARTICLE_COUNT = 1500;
+    const DUST_COUNT = 2500;
+
+    const mainParticles = [];
+    const dustParticles = [];
+
+    const tempVec3 = new THREE.Vector3();
+    const clock = new THREE.Clock();
+
+
+    // ---------- Particle Classes ----------
+    class MainParticle {
+      constructor(mesh, idx) {
+        this.mesh = mesh;
+        this.idx = idx;
+        this.t = idx / MAIN_PARTICLE_COUNT;
+        this.speed = 0.5 + Math.random() * 1.5;
+        this.random = new THREE.Vector3(
+          (Math.random() - 0.5) * 2,
+          (Math.random() - 0.5) * 2,
+          (Math.random() - 0.5) * 2
+        );
+        this.scatterTarget = new THREE.Vector3();
+        this.treeTarget = new THREE.Vector3();
+        this.backgroundTarget = new THREE.Vector3();
+        this.rotationVel = new THREE.Vector3(
+          (Math.random() - 0.5) * 0.6,
+          (Math.random() - 0.5) * 0.6,
+          (Math.random() - 0.5) * 0.6
+        );
+      }
+
+      computeTreeTarget() {
+        const t = this.t;
+        const maxRadius = 9;
+        const height = 26;
+        const radius = maxRadius * (1 - t);
+        const angle = t * 50 * Math.PI;
+
+        const x = radius * Math.cos(angle);
+        const z = radius * Math.sin(angle);
+        const y = t * height - height * 0.5;
+
+        this.treeTarget.set(x, y, z);
+      }
+
+      computeScatterTarget() {
+        // random inside spherical shell radius 8 ~ 20
+        const dir = new THREE.Vector3(
+          Math.random() * 2 - 1,
+          Math.random() * 2 - 1,
+          Math.random() * 2 - 1
+        ).normalize();
+        const r = 8 + Math.random() * 12;
+        this.scatterTarget.copy(dir).multiplyScalar(r);
+      }
+
+      computeBackgroundTarget() {
+        // background cloud for FOCUS
+        const dir = new THREE.Vector3(
+          Math.random() * 2 - 1,
+          Math.random() * 2 - 1,
+          Math.random() * 2 - 1
+        ).normalize();
+        const r = 25 + Math.random() * 30;
+        this.backgroundTarget.copy(dir).multiplyScalar(r);
+      }
+
+      updateTargets() {
+        this.computeTreeTarget();
+        this.computeScatterTarget();
+        this.computeBackgroundTarget();
+      }
+
+      update(dt) {
+        let target;
+        if (STATE.mode === "TREE") {
+          target = this.treeTarget;
+        } else if (STATE.mode === "SCATTER") {
+          target = this.scatterTarget;
+        } else {
+          target = this.scatterTarget;
+        }
+
+        this.mesh.position.lerp(target, 0.12);
+
+        if (STATE.mode === "SCATTER") {
+          this.mesh.rotation.x += this.rotationVel.x * dt;
+          this.mesh.rotation.y += this.rotationVel.y * dt;
+          this.mesh.rotation.z += this.rotationVel.z * dt;
+        } else {
+          // subtle breathing
+          this.mesh.rotation.y += 0.15 * dt * this.speed;
+        }
+      }
+    }
+
+    class DustSystem {
+      constructor(count) {
+        const geo = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        const sizes = new Float32Array(count);
+        for (let i = 0; i < count; i++) {
+          const dir = new THREE.Vector3(
+            Math.random() * 2 - 1,
+            Math.random() * 2 - 1,
+            Math.random() * 2 - 1
+          ).normalize();
+          const r = 25 + Math.random() * 50;
+          const v = dir.multiplyScalar(r);
+          positions[i * 3 + 0] = v.x;
+          positions[i * 3 + 1] = v.y;
+          positions[i * 3 + 2] = v.z;
+          sizes[i] = 1 + Math.random() * 3;
+        }
+        geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
+
+        const mat = new THREE.PointsMaterial({
+          color: new THREE.Color(0xfceea7),
+          size: 0.25,
+          sizeAttenuation: true,
+          transparent: true,
+          opacity: 0.8,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending
+        });
+
+        this.points = new THREE.Points(geo, mat);
+      }
+
+      update(dt) {
+        this.points.rotation.y += dt * 0.01;
+        this.points.rotation.x += dt * 0.004;
+      }
+    }
+
+    // ---------- INIT ----------
+    async function init() {
+      initRendererAndScene();
+      initLights();
+      initParticles();
+
+      await initEnvironment();
+
+      initPostProcessing();
+      initEvents();
+
+      fadeOutLoader();
+      animate();
+    }
+
+    function initRendererAndScene() {
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: false
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ReinhardToneMapping;
+      renderer.toneMappingExposure = 2.2;
+      sceneRoot.appendChild(renderer.domElement);
+
+      scene = new THREE.Scene();
+
+      camera = new THREE.PerspectiveCamera(
+        50,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        200
+      );
+      camera.position.set(0, 2, 50);
+
+      mainGroup = new THREE.Group();
+      scene.add(mainGroup);
+
+      window.addEventListener("resize", onWindowResize);
+    }
+
+    function initLights() {
+      const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambient);
+
+      const innerPoint = new THREE.PointLight(0xffa060, 2.0, 80, 2);
+      innerPoint.position.set(0, 6, 0);
+      mainGroup.add(innerPoint);
+
+      const warmSpot = new THREE.SpotLight(0xffe4b0, 1200, 220, Math.PI / 4, 0.3, 1);
+      warmSpot.position.set(30, 40, 40);
+      warmSpot.target.position.set(0, 10, 0);
+      scene.add(warmSpot);
+      scene.add(warmSpot.target);
+
+      const coolSpot = new THREE.SpotLight(0x88aaff, 600, 220, Math.PI / 4, 0.5, 1);
+      coolSpot.position.set(-30, 20, -30);
+      coolSpot.target.position.set(0, 0, 0);
+      scene.add(coolSpot);
+      scene.add(coolSpot.target);
+    }
+
+    async function initEnvironment() {
+      const pmremGen = new THREE.PMREMGenerator(renderer);
+      const env = new RoomEnvironment();
+      envMap = pmremGen.fromScene(env, 0.04).texture;
+      scene.environment = envMap;
+      scene.background = new THREE.Color(0x000000);
+      pmremGen.dispose();
+    }
+
+    function initParticles() {
+      // Materials
+      const goldMat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(0xd4af37),
+        metalness: 0.9,
+        roughness: 0.15,
+        envMapIntensity: 1.4
+      });
+
+      const darkGreenMat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(0x004225),
+        metalness: 0.4,
+        roughness: 0.6,
+        envMapIntensity: 0.8
+      });
+
+      const goldBallMat = new THREE.MeshPhysicalMaterial({
+        color: new THREE.Color(0xd4af37),
+        metalness: 1.0,
+        roughness: 0.1,
+        clearcoat: 0.6,
+        clearcoatRoughness: 0.15,
+        envMapIntensity: 1.5
+      });
+
+      const redBallMat = new THREE.MeshPhysicalMaterial({
+        color: new THREE.Color(0xaa1122),
+        metalness: 0.6,
+        roughness: 0.25,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.05,
+        envMapIntensity: 1.5
+      });
+
+      const boxGeo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+      const sphereGeo = new THREE.SphereGeometry(0.55, 24, 24);
+
+      // Candy cane geometry and texture
+      const candyTexture = createCandyCaneTexture();
+      const candyMat = new THREE.MeshStandardMaterial({
+        map: candyTexture,
+        roughness: 0.35,
+        metalness: 0.05
+      });
+      const candyGeo = createCandyCaneGeometry();
+
+      for (let i = 0; i < MAIN_PARTICLE_COUNT; i++) {
+        const type = Math.random();
+        let geo, mat;
+        if (type < 0.4) {
+          geo = boxGeo;
+          mat = Math.random() < 0.6 ? goldMat : darkGreenMat;
+        } else if (type < 0.85) {
+          geo = sphereGeo;
+          mat = Math.random() < 0.5 ? goldBallMat : redBallMat;
+        } else {
+          geo = candyGeo;
+          mat = candyMat;
+        }
+
+        const mesh = new THREE.Mesh(geo, mat);
+        const s = 0.6 + Math.random() * 0.8;
+        mesh.scale.setScalar(s);
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;
+        mainGroup.add(mesh);
+
+        const p = new MainParticle(mesh, i);
+        p.updateTargets();
+        // Random initial position
+        mesh.position.copy(p.scatterTarget);
+        mainParticles.push(p);
+      }
+
+      const dust = new DustSystem(DUST_COUNT);
+      dustParticles.push(dust);
+      scene.add(dust.points);
+    }
+
+    function createCandyCaneGeometry() {
+      const points = [];
+      const baseLen = 2.4;
+      const hookRadius = 0.9;
+      const straightCount = 10;
+      for (let i = 0; i < straightCount; i++) {
+        const t = i / (straightCount - 1);
+        points.push(new THREE.Vector3(0, t * baseLen, 0));
+      }
+      const hookSteps = 12;
+      for (let i = 0; i <= hookSteps; i++) {
+        const a = (i / hookSteps) * Math.PI;
+        const x = Math.cos(a) * hookRadius;
+        const y = baseLen + Math.sin(a) * hookRadius;
+        points.push(new THREE.Vector3(x, y, 0));
+      }
+
+      const curve = new THREE.CatmullRomCurve3(points);
+      const tubeGeo = new THREE.TubeGeometry(curve, 80, 0.14, 12, false);
+      return tubeGeo;
+    }
+
+    function createCandyCaneTexture() {
+      const size = 256;
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d");
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, size, size);
+
+      ctx.strokeStyle = "#cc1133";
+      ctx.lineWidth = size * 0.22;
+
+      const step = size * 0.45;
+      for (let i = -size; i < size * 2; i += step) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i + size, size);
+        ctx.stroke();
+      }
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(2, 4);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+
+    // ---------- Post-processing ----------
+    function initPostProcessing() {
+      composer = new EffectComposer(renderer);
+      const renderPass = new RenderPass(scene, camera);
+      composer.addPass(renderPass);
+
+      const resolution = new THREE.Vector2(window.innerWidth, window.innerHeight);
+      const bloomPass = new UnrealBloomPass(
+        resolution,
+        0.45, // strength
+        0.4,  // radius
+        0.7   // threshold
+      );
+      composer.addPass(bloomPass);
+    }
+
+
+    // ---------- Events ----------
+    function initEvents() {
+      // No events needed for tree-only mode
+    }
+
+    function fadeOutLoader() {
+      setTimeout(() => {
+        loaderEl.classList.add("hidden");
+      }, 300);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      if (composer) {
+        composer.setSize(window.innerWidth, window.innerHeight);
+      }
+    }
+
+    // ---------- Animation loop ----------
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = clock.getDelta();
+      const now = performance.now();
+
+      if (STATE.mode !== STATE.targetMode) {
+        if (now - STATE.lastModeSwitchTime > 150) {
+          STATE.mode = STATE.targetMode;
+        }
+      }
+
+      // Update particles
+      for (const p of mainParticles) {
+        p.update(dt);
+      }
+
+      for (const d of dustParticles) {
+        d.update(dt);
+      }
+
+      mainGroup.rotation.y += dt * 0.08; // slow base rotation
+
+      if (composer) {
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
+    }
+
+    // ---------- Kickoff ----------
+    init();
+  </script>
+</body>
+</html>
+
